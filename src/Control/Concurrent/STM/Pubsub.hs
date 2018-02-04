@@ -12,10 +12,14 @@ module Control.Concurrent.STM.Pubsub
   , isSlowestTSub
   ) where
 
-import Control.Concurrent.STM
+import Control.Monad.STM (STM, atomically)
+import Control.Concurrent.STM.TVar
+  (TVar, modifyTVar, newTVar, readTVar, writeTVar)
+import Control.Concurrent.STM.TMVar
+  (TMVar, mkWeakTMVar, newEmptyTMVar, putTMVar, readTMVar)
+import Control.Monad (guard)
+import Data.Functor (void)
 import GHC.Conc (unsafeIOToSTM)
-import Data.Functor
-import Control.Monad
 
 -- A 'TPub' is like a write-only 'TBQueue', bounded in size by the slowest
 -- subscriber.
