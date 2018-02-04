@@ -1,7 +1,7 @@
 name: stm-pubsub
 version: 0.1.0
 build-type: Simple
-cabal-version: >= 1.2
+cabal-version: >= 1.8
 
 library
   hs-source-dirs: src
@@ -9,3 +9,13 @@ library
       base
     , stm
   exposed-modules: Control.Concurrent.STM.Pubsub
+
+test-suite spec
+  hs-source-dirs: test
+  main-is: Main.hs
+  type: exitcode-stdio-1.0
+  build-depends:
+      base
+    , hspec
+    , stm
+    , stm-pubsub

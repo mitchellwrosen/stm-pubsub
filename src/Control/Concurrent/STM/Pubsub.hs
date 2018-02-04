@@ -1,11 +1,15 @@
 module Control.Concurrent.STM.Pubsub
   ( TPub
   , newTPub
+  , newTPubIO
   , writeTPub
   , sizeTPub
   , TSub
   , newTSub
+  , newTSubIO
   , readTSub
+  , sizeTSub
+  , isSlowestTSub
   ) where
 
 import Control.Concurrent.STM
@@ -14,7 +18,7 @@ import Data.Functor
 import Control.Monad
 
 -- A 'TPub' is like a write-only 'TBQueue', bounded in size by the slowest
--- 'TSub' subscriber.
+-- subscriber.
 data TPub a = TPub
   -- A TVar containing the end of the "chain" of TMVars. Invariant: this TVar
   -- always contains an empty TMVar.
@@ -44,6 +48,11 @@ newTPub size =
     <$> (newEmptyTMVar >>= newTVar . Chain 0)
     <*> newTVar 0
     <*> pure (fromIntegral size)
+
+-- | Create a new 'TPub' of the given maximum @size@.
+newTPubIO :: Int -> IO (TPub a)
+newTPubIO size =
+  atomically (newTPub size)
 
 -- | Write an element to a 'TPub', which is readable by all connected 'TSub's.
 -- Retries if the slowest subscriber is @size@ elements behind.
@@ -87,20 +96,51 @@ sizeTPub (TPub endVar lowestVar _) = do
   lowest <- readTVar lowestVar
   pure (height - lowest)
 
-newtype TSub a
-  = TSub (TVar (Chain a))
+-- | Get the height of a 'TPub'.
+heightTPub :: TPub a -> STM Integer
+heightTPub (TPub endVar _ _) = do
+  Chain height _ <- readTVar endVar
+  pure height
+
+-- | A 'TSub' is like a read-only 'TChan'.
+data TSub a = TSub
+  -- The chain of elements to read.
+  {-# UNPACK #-} !(TVar (Chain a))
+  -- A reference to the publisher itself.
+  !(TPub a)
 
 -- | Subscribe to a 'TPub'.
 newTSub :: TPub a -> STM (TSub a)
-newTSub (TPub endVar _ _) = do
+newTSub pub@(TPub endVar _ _) = do
   hole <- readTVar endVar
   headVar <- newTVar hole
-  pure (TSub headVar)
+  pure (TSub headVar pub)
+
+-- | Subscribe to a 'TPub'.
+newTSubIO :: TPub a -> IO (TSub a)
+newTSubIO pub =
+  atomically (newTSub pub)
 
 -- | Read a value from a 'TSub'.
 readTSub :: TSub a -> STM a
-readTSub (TSub chainVar) = do
+readTSub (TSub chainVar _) = do
   Chain _ cellVar <- readTVar chainVar
   Cell val newChain <- readTMVar cellVar
   writeTVar chainVar newChain
   pure val
+
+-- | Return the number of elements that have been written but not yet read by
+-- this subscriber.
+sizeTSub :: TSub a -> STM Integer
+sizeTSub (TSub chainVar pub) = do
+  Chain height _ <- readTVar chainVar
+  highest <- heightTPub pub
+  pure (highest - height)
+
+-- | Is this 'TSub' the slowest subscriber?
+isSlowestTSub :: TSub a -> STM Bool
+isSlowestTSub (TSub endVar pub) = do
+  Chain height _ <- readTVar endVar
+  highest <- heightTPub pub
+  size <- sizeTPub pub
+  pure (height == highest - size)
