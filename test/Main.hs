@@ -2,26 +2,44 @@ import Control.Applicative
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Concurrent.STM.Pubsub
+import Control.Exception
 import Control.Monad
+import Foreign.StablePtr
 import System.Mem (performGC)
 import Test.Hspec
 
 main :: IO ()
-main =
+main = do
+  -- Keep main thread alive through deadlocks, see note at the bottom of
+  -- Control.Concurrent
+  void (myThreadId >>= newStablePtr)
   hspec spec
 
 spec :: Spec
 spec = do
   describe "writeTPub" $ do
     it "respects max size" $ do
-      pub <- atomically (newTPub 1) :: IO (TPub Int)
+      pub <- newTPubIO 1 :: IO (TPub Int)
       atomically (writeTPub pub 1)
       atomically ((writeTPub pub 2 >> pure True) <|> pure False)
         `shouldReturn` False
 
+    it "unblocks as subscribers catch up" $ do
+      pub <- newTPubIO 1 :: IO (TPub Int)
+      sub <- atomically (newTSub pub)
+
+      -- Subscriber is slow, so we know publisher is actually retrying writes
+      _ <-
+        forkIO
+          (replicateM_ 100 $ do
+            threadDelay 100
+            atomically (readTSub sub))
+
+      replicateM_ 100 (atomically (writeTPub pub 1))
+
   describe "sizeTPub" $ do
     it "evaluates size using the slowest subscriber" $ do
-      pub <- atomically (newTPub 1000) :: IO (TPub Int)
+      pub <- newTPubIO 200 :: IO (TPub Int)
       sub1 <- atomically (newTSub pub)
       sub2 <- atomically (newTSub pub)
 
@@ -51,7 +69,7 @@ spec = do
 
   describe "sizeTSub" $ do
     it "reports size accurately" $ do
-      pub <- atomically (newTPub 1000) :: IO (TPub Int)
+      pub <- newTPubIO 200 :: IO (TPub Int)
       sub <- atomically (newTSub pub)
 
       atomically (replicateM_ 200 (writeTPub pub 1))
@@ -72,7 +90,7 @@ spec = do
 
   describe "isSlowestTSub" $ do
     it "determines if a subscriber is among the slowest" $ do
-      pub <- atomically (newTPub 1000) :: IO (TPub Int)
+      pub <- newTPubIO 200 :: IO (TPub Int)
       sub1 <- atomically (newTSub pub)
       sub2 <- atomically (newTSub pub)
 
